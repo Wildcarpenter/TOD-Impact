@@ -1,0 +1,404 @@
+---
+title: "HomeWork2_TOD_PolicyBrief"
+author: "Ziyi Guo"
+date: "2024-02-15"
+output:
+  pdf_document:
+    toc: true
+---
+
+## 1. Data Wrangling
+
+### Wrangling LA City Demographics Data
+
+
+Los Angeles County, the most populous county in the United States, is characterized by its diverse population of over 10 million people, significant ethnic diversity with large populations of Hispanic or Latino, White, Asian, and Black or African American residents, a wide range of income levels, and a varied housing market that includes high-density urban areas, suburban neighborhoods, and rural regions. The county also boasts an extensive public transportation network, including buses, light rail, and subway systems. For this project, I will choose Los Angeles County as the study area
+
+```{r setup_packages, warning = FALSE, message = FALSE, results='hide'}
+
+# Library packages
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(kableExtra)
+library(scales)
+
+options(scipen=999)
+options(tigris_class = "sf")
+
+census_api_key("3bf80073d9fce7ba071a4c9517128ca2396e6fe3", overwrite = TRUE)
+
+# Get LA county 2009 ACS data
+
+tracts09 <- 
+  get_acs(geography = "tract",
+          variables = c("B25026_001E", "B02001_002E",
+                        "B15001_050E", "B15001_009E",
+                        "B19013_001E", "B25058_001E",
+                        "B06012_002E"),
+          year = 2009,
+          state = "CA",         
+          county = "Los Angeles",
+          geometry = TRUE) %>%
+  st_transform(crs = 2229)
+
+# Clip to LA city scale
+
+LACity_Refer <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/City_Boundary.geojson") 
+LACity_Refer <- st_transform(LACity_Refer, st_crs(tracts09))
+
+tracts09_city <- st_intersection(tracts09, LACity_Refer)
+
+# Data manipulation
+
+tracts09_city <- 
+  tracts09_city %>%
+  dplyr::select( -NAME, -moe) %>%
+  spread(key = variable, value = estimate) %>%
+  rename(TotalPop = B25026_001, 
+         Whites = B02001_002,
+         FemaleBachelors = B15001_050, 
+         MaleBachelors = B15001_009,
+         MedHHInc = B19013_001, 
+         MedRent = B25058_001,
+         TotalPoverty = B06012_002)
+
+tracts09_city <- 
+  tracts09_city %>%
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop, 0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop), 0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2009") %>%
+  dplyr::select(-Whites,-FemaleBachelors,-MaleBachelors,-TotalPoverty)
+
+# Get 2019 LA county ACS data and clip to city scale
+tracts19 <- 
+  get_acs(geography = "tract", 
+          variables = c("B25026_001E","B02001_002E",
+                        "B15001_050E","B15001_009E",
+                        "B19013_001E","B25058_001E",
+                        "B06012_002E"), 
+          year=2019, state="CA", county="Los Angeles", 
+          geometry=TRUE, output="wide") %>%
+  st_transform(crs = 2229) %>%
+  rename(TotalPop = B25026_001E, 
+         Whites = B02001_002E,
+         FemaleBachelors = B15001_050E, 
+         MaleBachelors = B15001_009E,
+         MedHHInc = B19013_001E, 
+         MedRent = B25058_001E,
+         TotalPoverty = B06012_002E) %>%
+  dplyr::select(-NAME, -starts_with("B")) %>%
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop,0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop),0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2019") %>%
+  dplyr::select(-Whites, -FemaleBachelors, -MaleBachelors, -TotalPoverty) 
+
+tracts19_city <- st_intersection(tracts19, LACity_Refer)
+
+
+#Combie the 2009 and 2019 data
+
+allTracts <- rbind(tracts09_city,tracts19_city)
+
+```
+
+
+### Wrangling Transit Open Data
+
+LA county/city's main trail routes
+data resource: https://github.com/datadesk/lametro-maps
+
+```{r get LA transit data, warning = FALSE, message = FALSE, results='hide'}
+
+#get trail stations data
+
+green_station <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/Geojsonb/green-line-stations.geojson")
+gold_station <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/Geojsonb/gold-line-stations.geojson")
+blue_station <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/Geojsonb/blue-line-stations.geojson")
+expo_station <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/Geojsonb/expo-line-stations.geojson")
+RedPurple_station <- st_read("C:/Users/25077/Desktop/MUSA 508_PPA/3_/Geojsonb/red-and-purple.geojson")
+
+
+#combine into 1 data frame but noted with different context in another column
+
+LA_Stops <- 
+  rbind(
+     green_station %>% 
+      mutate(Line2 = "green_station") %>%
+      dplyr::select(STATION, LINE, Line2),
+     gold_station %>%
+      mutate(Line2 ="gold_station") %>%
+      dplyr::select(STATION, LINE, Line2),
+     blue_station %>%
+      mutate(Line2 ="blue_station") %>%
+      dplyr::select(STATION, LINE, Line2),
+     expo_station %>%
+      mutate(Line2 ="expo_station") %>%
+      dplyr::select(STATION, LINE, Line2),
+     RedPurple_station %>%
+      mutate(Line2 ="redPurple_station") %>%
+      dplyr::select(STATION, LINE, Line2)) %>%
+  st_transform(st_crs(tracts09))
+
+
+#clip the stations to fit into the city's boundary
+
+LA_Stops_city <- st_intersection(LA_Stops, LACity_Refer)
+```
+
+
+LA city is transforming its approach to urban development with a focus on Transit Oriented Development (TOD), centering growth around its expanding public transit system. Managed by the Los Angeles County Metropolitan Transportation Authority, the network includes subways, light-rails, and buses. TOD aims to create vibrant, walkable communities that capitalize on the proximity to transit stations, aiming to boost property values, reduce traffic, and promote sustainable living. As the city progresses, evaluating the impact of TOD is crucial for guiding future investments and ensuring that development meets the evolving needs of its residents.
+
+```{r viz transit data, warning = FALSE, message = FALSE}
+
+ggplot() + 
+  geom_sf(data=st_union(tracts09_city), color = NA) + 
+  geom_sf(data=LA_Stops_city, 
+          aes(colour = Line2), 
+          show.legend = "point", size= 1) +
+  scale_color_manual(values = c("blue_station" = "steelblue", 
+                                "expo_station" = "brown2",
+                                "gold_station" = "gold", 
+                                "green_station" = "darkseagreen", 
+                                "redPurple_station" = "hotpink2")) +
+  labs(title="LA City Stops", 
+       subtitle="Los Angeles, CA", 
+       caption="Figure 1") +
+  theme_void()
+```
+
+ In this framework, neighborhoods within a half-mile radius of public transit stations are strategically classified as TOD zones, fostering environments where sustainable practices and transit accessibility are paramount. 
+
+```{r buffer and union, warning = FALSE, message = FALSE}
+
+#buffer the stops r=2640 feet
+stopBuffer <- st_buffer(LA_Stops_city, 2640)
+
+#removing overlaps and forming a single shape
+stopUnion <- st_union(st_buffer(LA_Stops_city, 2640))
+
+LA_Stops_Buffers <- 
+  rbind(
+     stopBuffer %>%
+      mutate(Legend = "Buffer") %>%
+      dplyr::select(Legend),
+     stopUnion %>%
+      st_sf() %>%
+      mutate(Legend = "Unioned Buffer"))
+
+buffer <- filter(LA_Stops_Buffers, Legend=="Unioned Buffer")
+
+#select the tracts have centroids within the buffer area
+#Identified as the TOD area
+
+selectCentroids <-
+  st_centroid(tracts09_city)[buffer,] %>%
+  st_drop_geometry() %>%
+  left_join(., dplyr::select(tracts09_city, GEOID), by = "GEOID") %>%
+  st_sf() %>%
+  dplyr::select(TotalPop,GEOID) %>%
+  mutate(Selection_Type = "Select by Centroids")
+
+#plot the service area
+
+ggplot() +
+  geom_sf(data=tracts09_city, color=NA) +
+  geom_sf(data=selectCentroids, fill='lightpink1', alpha=0.7, color = NA) + 
+  geom_sf(data=LA_Stops_city, show.legend = TRUE,color='maroon', size=0.9) +
+  facet_wrap(~Selection_Type) +
+  labs(fill = "ACS estimate",
+       title="TOD Area", 
+       caption="Figure 2") +
+  theme_void()
+
+```
+
+## 2. The Influence of TOD on Urban Living and City Dynamics
+
+These public transit hubs, would naturally enhance accessibility, spur economic growth, and attract a denser population influx. However, the question arises: do these assumptions hold true in practice?
+
+```{r define TOD and non-TOD, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+#Define TOD and non-TOD
+
+allTracts.group <- 
+  rbind(
+    st_centroid(allTracts)[buffer,] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "TOD"),
+    st_centroid(allTracts)[buffer, op = st_disjoint] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "Non-TOD")) %>%
+  mutate(MedRent.inf = ifelse(year == "2009", MedRent * 1.14, MedRent)) 
+
+```
+
+### 2.1 Rent
+
+Both TOD and non-TOD areas have experienced an increase in rent over the decade. This is indicated by the darker shades in the 2019 plots compared to the 2009 plots, representing higher median rents.
+The TOD zones have indeed witnessed a surge in rental prices, albeit at a more gradual pace compared to the sharp increase observed at the fringes of the non-TOD regions. Adjacent non-TOD areas, in the immediate vicinity of TOD boundaries, have not seen a significant escalation in rent. Notably, the most substantial rent hikes within TOD areas occur at the core, where multiple transit lines converge.
+
+```{r}
+
+allTracts.group$year <- as.factor(allTracts.group$year)
+
+TOD_Rent <- ggplot(data = allTracts.group) +
+  geom_sf(aes(fill = MedRent.inf), color = NA) + 
+  facet_wrap(~year + TOD, ncol = 2) +  
+  scale_fill_distiller(palette = "RdPu", direction = 1) +  
+  labs(title = "Rent Changes Across Time and Space",
+       fill = "Median Rent (Inflation-adjusted)",
+       caption = "Figure 3") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.6),  
+        strip.text = element_text(size = rel(0.7)), 
+        legend.text = element_text(size = rel(0.7)), 
+        legend.title = element_text(size = rel(0.7)))
+
+plot(TOD_Rent)
+
+```
+
+### 2.2 Population
+
+From 2009 to 2019, both TOD and non-TOD regions saw a decline in population, with the non-TOD areas, particularly in the western parts of Santa Monica and Long Beach, experiencing a more marked decrease. Meanwhile, the TOD areas appear to have undergone a redistribution of population towards more central locations and did not witness as significant a loss as their non-TOD counterparts.
+
+```{r}
+
+allTracts.group$year <- as.factor(allTracts.group$year)
+
+TOD_Pop <- ggplot(data = allTracts.group) +
+  geom_sf(aes(fill = TotalPop), color = NA) + 
+  facet_wrap(~year + TOD, ncol = 2) +  
+  scale_fill_distiller(palette = "RdPu", direction = 1) +  
+  labs(title = "Population Changes Across Time and Space",
+       fill = "Total Population",
+       caption = "Figure 4") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.6),   # Center the title
+        strip.text = element_text(size = rel(0.7)), # Increase facet label text size if needed
+        legend.text = element_text(size = rel(0.7)), # Increase legend text size if needed
+        legend.title = element_text(size = rel(0.7)))
+
+plot(TOD_Pop)
+
+```
+
+### 2.3 White Population
+
+There appears to be an overall decrease in the proportion of the white population in both TOD and non-TOD areas over the ten-year period, as indicated by the shift to lighter shades in the 2019 maps compared to those of 2009. With the most significant reductions occurring within and in the fringe of central city areas, which typically coincide with TOD zones. This suggests a demographic shift where white populations may be moving away from these central, public transit-accessible areas. 
+```{r}
+
+
+TOD_White <- ggplot(data = allTracts.group) +
+  geom_sf(aes(fill = pctWhite), color = NA) + 
+  facet_wrap(~year + TOD, ncol = 2) +  
+  scale_fill_distiller(palette = "RdPu", direction = 1, limits = c(0, 1), name = "White Population\nPercentage") +  
+  labs(title = "White Population Changes Across Time and Space",
+       fill = "White Population",
+       caption = "Figure 5") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.6),   # Center the title
+        strip.text = element_text(size = rel(0.7)), # Increase facet label text size if needed
+        legend.text = element_text(size = rel(0.7)), # Increase legend text size if needed
+        legend.title = element_text(size = rel(0.7)))
+
+plot(TOD_White)
+
+```
+
+### 2.4 Poverty
+
+In Los Angeles city, areas with higher poverty rates are predominantly located in the central city regions, which often overlap with TOD zones. Between 2009 and 2019, there has been a significant improvement across the city, with both TOD and non-TOD areas experiencing a reduction in poverty rates. Notably, the TOD areas have demonstrated a marked decrease in poverty, suggesting that the presence of transit-oriented development may be contributing positively to the economic well-being of these communities.
+
+```{r}
+
+
+TOD_poverty <- ggplot(data = allTracts.group) +
+  geom_sf(aes(fill = pctPoverty), color = NA) + 
+  facet_wrap(~year + TOD, ncol = 2) +  
+  scale_fill_distiller(palette = "RdPu", direction = 1, limits = c(0, 1)) +  
+  labs(title = "Poverty Rate Changes Across Time and Space",
+       fill = "Poverty Rate",
+       caption = "Figure 6") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.6),   # Center the title
+        strip.text = element_text(size = rel(0.7)), # Increase facet label text size if needed
+        legend.text = element_text(size = rel(0.7)), # Increase legend text size if needed
+        legend.title = element_text(size = rel(0.7)))
+
+plot(TOD_poverty)
+
+```
+
+
+### 2.5 Summary
+
+From 2009 to 2019, the rent in both TOD and non-TOD areas of Los Angeles has surged, with non-TOD areas seeing a steeper rise. The population has diminished in both sectors, more so in non-TOD areas. The percentage of the white population has also decreased in TOD areas, while remaining relatively unchanged in non-TOD areas. Educational attainment, indicated by the percentage of individuals with a bachelor's degree, has increased across both TOD and non-TOD areas. Contrary to the trend in rent, the poverty rate has decreased in both TOD and non-TOD areas, with non-TOD areas showing a more significant drop. 
+
+```{r message=FALSE, warning=FALSE}
+allTracts.Summary <- 
+  st_drop_geometry(allTracts.group) %>%
+  group_by(year, TOD) %>%
+  summarize(Rent = mean(MedRent, na.rm = T),
+            Population = mean(TotalPop, na.rm = T),
+            Percent_White = mean(pctWhite, na.rm = T),
+            Percent_Bach = mean(pctBachelors, na.rm = T),
+            Percent_Poverty = mean(pctPoverty, na.rm = T))
+
+kable(allTracts.Summary) %>%
+  kable_styling() %>%
+  footnote(general_title = "\n",
+           general = "Table 1, ")
+```
+
+The percentage of residents with a bachelor’s degree (Percent_Bach) has seen an increase in TOD areas compared to non-TOD areas, suggesting a higher concentration of educated individuals in transit-proximate regions. The poverty rate (Percent_Poverty) shows a decrease in both areas but more significantly in non-TOD areas. This could indicate that the economic benefits of living in TOD areas are not as pronounced when it comes to poverty reduction.
+
+The percentage of the white population (Percent_White) has declined in TOD areas over the 10-year period, which may suggest either a demographic shift towards greater diversity in these areas or a relocation trend among the white population. The population overall has declined in both TOD and non-TOD areas, with non-TOD areas experiencing a slightly more considerable decrease.
+
+Rent increases are evident in both TOD and non-TOD areas; however, the rate of increase is more pronounced in non-TOD areas. This could reflect a competitive housing market outside of centrally located, transit-accessible neighborhoods.
+
+```{r}
+allTracts.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Variable, scales = "free", ncol=5) +
+  scale_fill_manual(values = c("bisque1", "hotpink3")) +
+  labs(title = "Indicator Differences across Time and Space",
+       caption="Figure 7") +
+  theme_minimal()+ theme(legend.position="bottom")
+```
+
+### 2.6 Policy Brief
+
+The insights from the data on changes in educational attainment, poverty rates, population demographics, and rent can inform public policy and urban planning in several ways:
+
+1. **Affordable Housing Initiatives**: The significant increase in rent, especially in non-TOD areas, suggests a need for policies that ensure a supply of affordable housing to prevent displacement and maintain diversity. Incentives for developers to include affordable units and the preservation of existing affordable housing can be crucial.
+
+2. **Education and Workforce Development**: The rise in residents with bachelor's degrees in TOD areas could encourage the development of policies that support continued education and workforce development, taking advantage of the proximity to transit for easy access to educational institutions and job centers.
+
+3. **Poverty Reduction Strategies**: Given the decrease in poverty rates, particularly in non-TOD areas, programs that have proven effective could be expanded. In TOD areas, targeted interventions may be necessary to address the less pronounced decrease in poverty rates, including job training, economic development initiatives, and support services.
+
+4. **Transit Infrastructure Investment**: The population trends indicate that maintaining or enhancing transit services could be vital to supporting the residential base. Investments in transit infrastructure can improve accessibility, encourage transit use, and potentially attract more residents to TOD areas.
+
+5. **Diverse and Inclusive Communities**: The decline in the white population in TOD areas points to demographic shifts that may require policies promoting inclusive communities that welcome and support a diverse population, through cultural programming, non-discriminatory housing practices, and community services that cater to a variety of residents.
+
+6. **Sustainable Development**: Urban planners can leverage the concentration of educated individuals in TOD areas to foster sustainable development practices, such as green buildings, community gardens, and other environmentally friendly initiatives that could appeal to this demographic.
+
+7. **Economic Incentives**: To stimulate economic growth and reduce poverty, incentives could be offered to businesses that establish themselves in TOD areas, providing jobs and services to the local community.
+
+8. **Monitor and Adjust Policies**: Continuous monitoring of demographic and economic trends is crucial for adjusting policies and ensuring they meet the evolving needs of both TOD and non-TOD areas.
+
+By considering these data-driven insights, public policy and urban planning can be more effectively tailored to enhance the livability, sustainability, and economic vitality of Los Angeles, ensuring that the benefits of development are equitably distributed across the city.
